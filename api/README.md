@@ -1,8 +1,18 @@
 # Ethereum Validator Key API
 
-An API built on top of the staking-deposit-cli to programmatically generate Ethereum validator keys for local testnets.
+An API built on top of a fork of ethstaker-deposit-cli to programmatically generate Ethereum validator keys for kurtosis testnets.
 
 ## Setup
+
+0. Install python via pyenv, and create a virtualenv for the project.
+
+```bash 
+pyenv install 3.12
+pyenv local 3.12
+
+pyenv virtualenv 3.12 ethstaker-deposit-cli 
+pyenv activate ethstaker-deposit-cli 
+```
 
 1. Install the API dependencies:
 ```bash
@@ -10,9 +20,22 @@ pip install -r requirements_api.txt
 ```
 
 2. Run the API:
-```bash
-python -m api.run
+
+In order to run this against Kurtosis, you need to set the following environment variable:
 ```
+export VALIDATOR_NODE_URL=
+```
+
+This needs to be an RPC URL for one of the validator clients, such as : 
+```
+vc-1-geth-teku-lodestar's http-validator http url
+```
+
+The final command should look like this:
+```bash
+export VALIDATOR_NODE_URL='http://localhost:128102' && python -m api.run
+```
+
 
 This will start the FastAPI server at http://localhost:8000.
 
@@ -40,14 +63,3 @@ Generate a new validator key for use with the local testnet.
 }
 ```
 
-## Usage with Kurtosis
-
-In order to run this against Kurtosis, you need to set the following environment variable:
-```
-export VALIDATOR_NODE_URL=
-```
-
-For example getting the RPC url for one of the valiadtor clients, such as : 
-```
-vc-1-geth-teku-lodestar's http-validator http url
-```
