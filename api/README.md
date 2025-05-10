@@ -42,4 +42,12 @@ Generate a new validator key for use with the local testnet.
 
 ## Usage with Kurtosis
 
-This API is configured to work with a local Kurtosis Ethereum testnet by default. The Kurtosis network parameters are set in the `DEFAULT_KURTOSIS_CONFIG` variable in `main.py`. 
+In order to run this against Kurtosis, you need to set the following environment variable:
+```
+export VALIDATOR_NODE_URL=
+```
+
+For example getting the RPC url for one of the valiadtor clients, such as : 
+```
+vc-1-geth-teku-lodestar's http-validator http url
+```
