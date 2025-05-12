@@ -1,4 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from starlette.responses import Response as StarletteResponse # Renamed to avoid conflict
 from pydantic import BaseModel, Field
 import json
 import tempfile
@@ -7,6 +9,10 @@ import requests
 import os
 import shutil
 from dotenv import load_dotenv
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # Load environment variables from .env file
 load_dotenv()
@@ -20,6 +26,84 @@ app = FastAPI(title="Ethereum Validator Key API",
              description="API for generating validator keys for Ethereum",
              version="0.1.0")
 
+@app.middleware("http")
+async def log_requests_responses_middleware(request: Request, call_next):
+    # Log request details
+    logging.info(f"Incoming Request: {request.method} {request.url.path}")
+    logging.info(f"Headers: {dict(request.headers)}")
+    
+    # Read and log request body
+    request_body_bytes = await request.body()
+    if request_body_bytes:
+        try:
+            request_body_json = json.loads(request_body_bytes.decode('utf-8'))
+            logging.info(f"Request Body: {request_body_json}")
+        except json.JSONDecodeError:
+            logging.info(f"Request Body (not JSON): {request_body_bytes.decode(errors='ignore')}")
+    else:
+        logging.info("Request Body: Empty")
+
+    # Process the request
+    response = await call_next(request)
+
+    # Log response details
+    logging.info(f"Response Status Code: {response.status_code}")
+
+    response_body_bytes = b""
+    if isinstance(response, StreamingResponse):
+        # Create an async generator to read the stream, log it, and pass it through
+        async def body_iterator():
+            nonlocal response_body_bytes
+            async for chunk in response.body_iterator:
+                response_body_bytes += chunk
+                yield chunk
+        
+        # Consume the iterator to log the full body, then reconstruct the response
+        # This temporary consumption is to get the full body for logging.
+        # The client will receive data through the new StreamingResponse.
+        temp_body_parts = []
+        async for chunk in body_iterator():
+            temp_body_parts.append(chunk)
+        
+        # Log the fully formed body
+        if response_body_bytes:
+            try:
+                # Attempt to decode as JSON first for prettier logging
+                response_body_json = json.loads(response_body_bytes.decode('utf-8'))
+                logging.info(f"Response Body: {response_body_json}")
+            except json.JSONDecodeError:
+                logging.info(f"Response Body (not JSON or empty): {response_body_bytes.decode(errors='ignore')}")
+        else:
+            logging.info("Response Body: Empty or already streamed")
+
+        # Re-create the generator for the actual response to be sent to the client
+        async def new_body_iterator():
+            for part in temp_body_parts:
+                yield part
+
+        # Return a new StreamingResponse that the client can consume
+        return StreamingResponse(
+            content=new_body_iterator(), 
+            status_code=response.status_code,
+            headers=dict(response.headers), 
+            media_type=response.media_type
+        )
+    elif hasattr(response, "body"): # Handles FastAPI's JSONResponse, HTMLResponse etc.
+        response_body_bytes = response.body
+        if response_body_bytes:
+            try:
+                # Attempt to decode as JSON first for prettier logging
+                response_body_json = json.loads(response_body_bytes.decode('utf-8'))
+                logging.info(f"Response Body: {response_body_json}")
+            except json.JSONDecodeError:
+                logging.info(f"Response Body (not JSON): {response_body_bytes.decode(errors='ignore')}")
+        else:
+            logging.info("Response Body: Empty")
+    else:
+        logging.info("Response Body: Not directly accessible (possibly already sent or non-standard response type)")
+
+    return response
+
 VALIDATOR_NODE_URL = os.environ.get("VALIDATOR_NODE_URL", "http://127.0.0.1:61214")
 VALIDATOR_NODE_BEARER_TOKEN = os.environ.get("VALIDATOR_NODE_BEARER_TOKEN", "0x3ec0ad340bb9ca21e5593045b533d11d1b6784e03468af01db621db1804c2f0f")
 
@@ -29,7 +113,7 @@ class ProvisionRequest(BaseModel):
     """
     fee_recipient_address: str = Field(..., description="Ethereum address for validator fee recipient")
     withdrawal_address: str = Field(..., description="Ethereum address for withdrawal credentials")
-    amount: str = Field(..., description="Amount in wei (usually '64000000000000000000' for 64 ETH)")
+    amount: int = Field(..., description="Amount in Gwei (e.g., 64 for 64 Gwei, which will be converted to 64000000000 Wei)")
 
 class ProvisionResponse(BaseModel):
     """
@@ -53,9 +137,8 @@ def provision(request: ProvisionRequest):
     """
     try:
              
-        amount_wei = int(request.amount)
-        amount_eth = amount_wei / (10**18)
-        amount_gwei = amount_wei // (10**9)
+        amount_eth = request.amount
+        amount_gwei = request.amount * 1000000000
 
         if amount_eth != 64.0:
             print(f"Warning: Non-standard deposit amount: {amount_eth} ETH")
