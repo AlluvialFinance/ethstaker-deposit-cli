@@ -323,9 +323,58 @@ async def exit_validator(request: ExitRequest):
         if not public_key.startswith("0x"):
             public_key = "0x" + public_key
 
-        # --- 1. Load Chain Setting ---
-        chain_setting = get_chain_setting(KURTOSIS) # Assumes KURTOSIS and get_chain_setting are available
-        logging.info(f"Using chain setting: {chain_setting.NETWORK_NAME}")
+        # --- 1. Load Chain Setting (Dynamic Genesis Root and Fork Versions) ---
+        # Fetch genesis validators root, genesis fork version, and current fork version from beacon node
+        def fetch_chain_config(beacon_node_api_url: str):
+            headers = {"Authorization": f"Bearer {VALIDATOR_NODE_BEARER_TOKEN}"}
+
+            # Fetch genesis data (includes genesis_validators_root AND genesis_fork_version)
+            genesis_url = f"{beacon_node_api_url}/eth/v1/beacon/genesis"
+            logging.info(f"Fetching genesis data from: {genesis_url}")
+            try:
+                g = requests.get(genesis_url, headers=headers, timeout=10)
+                g.raise_for_status()
+                gdata = g.json().get("data", {})
+                genesis_validators_root = gdata.get("genesis_validators_root")
+                genesis_fork_version = gdata.get("genesis_fork_version")
+                if not genesis_validators_root or not genesis_fork_version:
+                    raise HTTPException(status_code=500, detail="Missing genesis data from beacon node")
+                logging.info(f"Fetched genesis_validators_root: {genesis_validators_root}")
+                logging.info(f"Fetched genesis_fork_version: {genesis_fork_version}")
+            except Exception as e:
+                logging.error(f"Failed to fetch genesis data: {e}")
+                raise HTTPException(status_code=503, detail=f"Failed to fetch genesis data: {str(e)}")
+
+            # Fetch current fork version (for exit)
+            fork_url = f"{beacon_node_api_url}/eth/v1/beacon/states/head/fork"
+            logging.info(f"Fetching current fork from: {fork_url}")
+            try:
+                f = requests.get(fork_url, headers=headers, timeout=10)
+                f.raise_for_status()
+                fork_data = f.json().get("data", {})
+                current_fork_version = fork_data.get("current_version")
+                if not current_fork_version:
+                    raise HTTPException(status_code=500, detail="Missing current_version from beacon node fork data")
+                logging.info(f"Fetched current fork version: {current_fork_version}")
+            except Exception as e:
+                logging.error(f"Failed to fetch current fork: {e}")
+                raise HTTPException(status_code=503, detail=f"Failed to fetch current fork: {str(e)}")
+
+            return genesis_validators_root, genesis_fork_version, current_fork_version
+
+        beacon_node_api_url = BEACON_NODE_URL
+        genesis_validators_root, genesis_fork_version, current_fork_version = fetch_chain_config(beacon_node_api_url)
+
+        # Use dynamic genesis root and fork versions from beacon node
+        # For voluntary exits, use Capella fork version (0x40000038) - matches KurtosisSetting
+        exit_fork_capella = "0x40000038"
+        chain_setting = get_devnet_chain_setting(
+            network_name=KURTOSIS,
+            genesis_fork_version=genesis_fork_version,        # Genesis fork (0x10000038)
+            exit_fork_version=exit_fork_capella,              # Capella fork for exit (0x40000038)
+            genesis_validator_root=genesis_validators_root,   # Dynamic - changes per Kurtosis run
+        )
+        logging.info(f"Using chain setting - genesis_fork: {genesis_fork_version}, exit_fork: {exit_fork_capella}, genesis_root: {genesis_validators_root}")
 
         # --- 2. Locate Keystore and Load Private Key ---
         keystore_password = "kurtosis-testnet"
